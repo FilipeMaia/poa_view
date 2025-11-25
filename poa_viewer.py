@@ -1,5 +1,8 @@
 import sys
 import time
+import queue
+import datetime
+import cv2
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
@@ -398,11 +401,73 @@ class HistogramWindow(QMainWindow):
         pass
 
 
+class VideoRecorder(QThread):
+    def __init__(self):
+        super().__init__()
+        self.queue = queue.Queue()
+        self.running = False
+        self.writer = None
+        self.filename = ""
+        self.width = 0
+        self.height = 0
+        self.is_color = False
+        
+    def start_recording(self, filename, width, height, is_color, fps=30.0):
+        self.filename = filename
+        self.width = width
+        self.height = height
+        self.is_color = is_color
+        
+        # Define codec
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+        self.writer = cv2.VideoWriter(self.filename, fourcc, fps, (self.width, self.height), True) # Always use color writer for compatibility
+        
+        self.running = True
+        self.start()
+        
+    def add_frame(self, frame):
+        if self.running:
+            self.queue.put(frame)
+            
+    def stop_recording(self):
+        self.running = False
+        self.wait()
+        if self.writer:
+            self.writer.release()
+            self.writer = None
+            
+    def run(self):
+        while self.running or not self.queue.empty():
+            try:
+                frame = self.queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+                
+            if self.writer:
+                # Prepare frame for OpenCV (BGR)
+                if len(frame.shape) == 2:
+                    # Mono -> BGR
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                else:
+                    # RGB -> BGR
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                
+                # Resize if needed (should match init size, but safety check)
+                if bgr.shape[1] != self.width or bgr.shape[0] != self.height:
+                    bgr = cv2.resize(bgr, (self.width, self.height))
+                    
+                self.writer.write(bgr)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("POA Camera Viewer")
         self.resize(1000, 800)
+        
+        self.worker = None
+        self.recorder = VideoRecorder()
+        self.recording = False
 
         # Central Widget & Layout
         central_widget = QWidget()
@@ -485,6 +550,13 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         controls_layout.addWidget(self.btn_stop)
         
+        # Record Button
+        self.btn_record = QPushButton("Record Video")
+        self.btn_record.setCheckable(True)
+        self.btn_record.clicked.connect(self.toggle_recording)
+        self.btn_record.setEnabled(False) # Only enable when capturing
+        controls_layout.addWidget(self.btn_record)
+        
         controls_layout.addStretch()
 
         # Image Display (Right)
@@ -540,14 +612,20 @@ class MainWindow(QMainWindow):
         
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self.btn_record.setEnabled(True)
+        self.update_status("Capture started.")
 
     def stop_capture(self):
         if self.worker:
             self.worker.stop()
             self.worker = None
-        
+            
+        if self.recording:
+            self.toggle_recording() # Stop recording if active
+            
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self.btn_record.setEnabled(False)
         self.update_status("Capture stopped.")
 
     def update_image(self, img):
@@ -555,6 +633,10 @@ class MainWindow(QMainWindow):
         if len(img.shape) == 3:
             levelMode = 'rgba'
         self.imv.setImage(img, autoLevels=False, autoRange=False)
+        
+        if self.recording:
+            self.recorder.add_frame(img)
+            
         # if self.hist_window.isVisible():
         #    self.hist_window.update_histogram(img)
 
@@ -576,6 +658,43 @@ class MainWindow(QMainWindow):
     def update_gain(self, val):
         if self.worker:
             self.worker.set_gain(val, self.auto_gain_check.isChecked())
+
+    def toggle_recording(self):
+        if self.btn_record.isChecked():
+            # Start recording
+            self.recording = True
+            self.btn_record.setText("Stop Recording")
+            self.btn_record.setStyleSheet("background-color: red; color: white;")
+            
+            # Generate filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"capture_{timestamp}.mp4"
+            
+            # Determine dimensions and type from current image (or mock)
+            # We need the current image to know size. 
+            # Ideally we get it from the worker or wait for first frame.
+            # For now, let's assume the next frame in update_image will handle it? 
+            # No, we need to init the recorder.
+            # Let's peek at the image in the ImageView if available
+            if self.imv.image is not None:
+                img = self.imv.image
+                h, w = img.shape[:2]
+                is_color = (len(img.shape) == 3)
+                self.recorder.start_recording(filename, w, h, is_color)
+                self.update_status(f"Recording to {filename}...")
+            else:
+                # Should not happen if capture is running and we have frames
+                self.recording = False
+                self.btn_record.setChecked(False)
+                self.update_status("No image to record.")
+                
+        else:
+            # Stop recording
+            self.recording = False
+            self.btn_record.setText("Record Video")
+            self.btn_record.setStyleSheet("")
+            self.recorder.stop_recording()
+            self.update_status(f"Recording saved: {self.recorder.filename}")
 
     def toggle_auto_gain(self, state):
         is_auto = (state == Qt.Checked)
