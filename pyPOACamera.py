@@ -2,9 +2,35 @@
 from ctypes import *
 import numpy as np
 from enum import Enum
-#dll = cdll.LoadLibrary("./PlayerOneCamera.dll") # Windows, if your python is 64bit, please copy dll file from lib\x64 folder, if python is 32bit, copy dll file from lib\x86
-#dll = cdll.LoadLibrary("./libPlayerOneCamera.so") # Linux, please copy the 4 'so' files of the corresponding architecture, eg: if your Linux is arm64(aarch64) architecture, please copy the 4 'so' files from lib\arm64
-dll = cdll.LoadLibrary("./libPlayerOneCamera.dylib") # Mac OS, please copy the 4 'dylib' files from 'lib' folder
+import platform
+
+# Determine OS and load appropriate library
+system = platform.system()
+if system == "Windows":
+    # Windows, if your python is 64bit, please copy dll file from lib\x64 folder, if python is 32bit, copy dll file from lib\x86
+    dll_name = "./PlayerOneCamera.dll"
+elif system == "Linux":
+    # Linux, please copy the 4 'so' files of the corresponding architecture, eg: if your Linux is arm64(aarch64) architecture, please copy the 4 'so' files from lib\arm64
+    dll_name = "./libPlayerOneCamera.so"
+elif system == "Darwin":
+    # Mac OS, please copy the 4 'dylib' files from 'lib' folder
+    dll_name = "./libPlayerOneCamera.dylib"
+else:
+    print(f"Warning: Unsupported operating system: {system}")
+    dll_name = "./libPlayerOneCamera.dylib" # Default fallback
+
+try:
+    dll = cdll.LoadLibrary(dll_name)
+except OSError as e:
+    print(f"Error loading library '{dll_name}': {e}")
+    # Create a dummy object to prevent immediate crash on import, 
+    # but actual calls will fail or need handling.
+    class DummyDLL:
+        def __getattr__(self, name):
+            def dummy(*args, **kwargs):
+                return -1 # Return error code
+            return dummy
+    dll = DummyDLL()
 
 
 #************************Type Define************************
