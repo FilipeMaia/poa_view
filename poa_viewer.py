@@ -21,6 +21,7 @@ class CameraWorker(QThread):
     status_message = pyqtSignal(str)
     error_message = pyqtSignal(str)
     fps_updated = pyqtSignal(float)
+    temperature_updated = pyqtSignal(float)
     histogram_ready = pyqtSignal(object)
     
     # Profiling signals
@@ -48,6 +49,14 @@ class CameraWorker(QThread):
         self.fps_frame_count = 0
         
         self.compute_histogram = False
+        
+        # White Balance
+        self.wb_r = 0
+        self.wb_g = 0
+        self.wb_b = 0
+        self.auto_wb = True
+        
+        self.last_temp_time = time.time()
 
     def run(self):
         self.running = True
@@ -74,8 +83,31 @@ class CameraWorker(QThread):
                     # Use max resolution
                     pyPOACamera.SetImageSize(self.camera_id, props.maxWidth, props.maxHeight)
                     self.status_message.emit(f"Resolution: {props.maxWidth}x{props.maxHeight}")
-                    # Set auto white balance
-                    pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R, 0, True)
+                    
+                    # Determine if camera is color based on supported formats
+                    # A more robust check might be needed, but for now, if RGB24 is supported, assume color.
+                    err, formats = pyPOACamera.GetSupportedImageFormats(self.camera_id)
+                    if pyPOACamera.POAImgFormat.POA_RGB24 in formats:
+                        self.is_color = True
+                    else:
+                        self.is_color = False
+
+                    # Apply settings
+                    pyPOACamera.SetExp(self.camera_id, int(self.exposure_us), False) # Manual exposure for now
+                    pyPOACamera.SetGain(self.camera_id, int(self.gain), self.auto_gain)
+                    
+                    # Apply White Balance
+                    if self.is_color:
+                        if self.auto_wb:
+                            # Setting one to auto enables auto WB usually
+                            pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R, 0, True)
+                        else:
+                            pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R, self.wb_r, False)
+                            pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_G, self.wb_g, False)
+                            pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_B, self.wb_b, False)
+
+                    # Start continuous exposure
+                    pyPOACamera.StartExposure(self.camera_id, False) # False = Video Mode
                 else:
                     self.error_message.emit(f"Failed to open camera: {pyPOACamera.GetErrorString(err)}")
                     self.mock_mode = True
@@ -85,10 +117,6 @@ class CameraWorker(QThread):
         else:
             self.status_message.emit("No camera found. Entering Mock Mode.")
             self.mock_mode = True
-
-        if self.camera_opened:
-            # Start continuous exposure
-            pyPOACamera.StartExposure(self.camera_id, False) # False = Video Mode
 
         while self.running:
             if self.camera_opened:
@@ -126,6 +154,24 @@ class CameraWorker(QThread):
         if auto != self.auto_gain or (not self.auto_gain and curr_gain != self.gain):
             pyPOACamera.SetGain(self.camera_id, int(self.gain), self.auto_gain)
 
+        # White Balance
+        if self.is_color:
+            err, curr_wb_r, auto_r = pyPOACamera.GetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R)
+            err, curr_wb_g, auto_g = pyPOACamera.GetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_G)
+            err, curr_wb_b, auto_b = pyPOACamera.GetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_B)
+
+            if auto_r != self.auto_wb: # If auto state changed for R, assume it changed for all
+                pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R, 0, self.auto_wb)
+                pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_G, 0, self.auto_wb)
+                pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_B, 0, self.auto_wb)
+            elif not self.auto_wb: # If manual, check individual values
+                if curr_wb_r != self.wb_r:
+                    pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_R, self.wb_r, False)
+                if curr_wb_g != self.wb_g:
+                    pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_G, self.wb_g, False)
+                if curr_wb_b != self.wb_b:
+                    pyPOACamera.SetConfig(self.camera_id, pyPOACamera.POAConfig.POA_WB_B, self.wb_b, False)
+
         # Frame Limit
         # Note: POA_FRAME_LIMIT might not support GetConfig in the same way or we just set it.
         # Let's try to get it first to avoid redundant sets.
@@ -152,6 +198,8 @@ class CameraWorker(QThread):
             if err == pyPOACamera.POAErrors.POA_OK:
                 self.current_format = self.requested_format
                 self.status_message.emit(f"Format changed to {self.current_format.name}")
+                # Update is_color based on new format
+                self.is_color = (self.current_format == pyPOACamera.POAImgFormat.POA_RGB24)
             else:
                 self.error_message.emit(f"Failed to set format: {pyPOACamera.GetErrorString(err)}")
             pyPOACamera.StartExposure(self.camera_id, False)
@@ -188,6 +236,7 @@ class CameraWorker(QThread):
                         self._calculate_and_emit_histogram(img)
                         
                     self._measure_fps()
+                    self._check_temperature()
             else:
                 # Timeout or error
                 pass
@@ -240,6 +289,7 @@ class CameraWorker(QThread):
             self._calculate_and_emit_histogram(noise)
         
         self._measure_fps()
+        self._check_temperature()
             
         time.sleep(max(0.01, self.exposure_us / 1000000.0)) # Simulate exposure time delay
 
@@ -252,6 +302,19 @@ class CameraWorker(QThread):
             self.fps_updated.emit(fps)
             self.fps_frame_count = 0
             self.last_fps_time = now
+
+    def _check_temperature(self):
+        now = time.time()
+        if now - self.last_temp_time >= 10.0:
+            self.last_temp_time = now
+            if self.mock_mode:
+                # Simulate temp
+                temp = 20.0 + np.sin(now/10.0) * 5.0
+                self.temperature_updated.emit(temp)
+            else:
+                err, temp = pyPOACamera.GetCameraTEMP(self.camera_id)
+                if err == pyPOACamera.POAErrors.POA_OK:
+                    self.temperature_updated.emit(temp)
 
     def set_histogram_enabled(self, enabled):
         self.compute_histogram = enabled
@@ -324,9 +387,15 @@ class CameraWorker(QThread):
     def set_exposure(self, us):
         self.exposure_us = us
 
-    def set_gain(self, val, auto=False):
-        self.gain = val
+    def set_gain(self, gain, auto=False):
+        self.gain = gain
         self.auto_gain = auto
+        
+    def set_white_balance(self, r, g, b, auto):
+        self.wb_r = r
+        self.wb_g = g
+        self.wb_b = b
+        self.auto_wb = auto
 
     def set_frame_limit(self, val):
         self.frame_limit = val
@@ -519,8 +588,12 @@ class MainWindow(QMainWindow):
         fps_layout.addWidget(self.fps_spin)
         
         self.fps_est_label = QLabel("Actual: 0.0 fps")
-        fps_layout.addWidget(self.fps_est_label)
-
+        controls_layout.addWidget(self.fps_est_label)
+        
+        # Temperature Display
+        self.temp_label = QLabel("Temp: -- C")
+        controls_layout.addWidget(self.temp_label)
+        
         # Binning Control
         controls_layout.addWidget(QLabel("Binning:"))
         self.bin_spin = QSpinBox()
@@ -528,6 +601,52 @@ class MainWindow(QMainWindow):
         self.bin_spin.setValue(2) # Default to 2
         self.bin_spin.valueChanged.connect(self.update_binning)
         controls_layout.addWidget(self.bin_spin)
+        
+        # White Balance Control
+        self.wb_group = QGroupBox("White Balance")
+        wb_layout = QVBoxLayout()
+        self.wb_group.setLayout(wb_layout)
+        
+        # Auto WB Checkbox
+        self.auto_wb_check = QCheckBox("Auto")
+        self.auto_wb_check.setChecked(True)
+        self.auto_wb_check.stateChanged.connect(self.toggle_auto_wb)
+        wb_layout.addWidget(self.auto_wb_check)
+        
+        # R Channel
+        wb_r_layout = QHBoxLayout()
+        wb_r_layout.addWidget(QLabel("R:"))
+        self.wb_r_spin = QSpinBox()
+        self.wb_r_spin.setRange(-1200, 1200)
+        self.wb_r_spin.setValue(0)
+        self.wb_r_spin.setEnabled(False) # Default to disabled (Auto is on)
+        self.wb_r_spin.valueChanged.connect(self.update_white_balance)
+        wb_r_layout.addWidget(self.wb_r_spin)
+        wb_layout.addLayout(wb_r_layout)
+        
+        # G Channel
+        wb_g_layout = QHBoxLayout()
+        wb_g_layout.addWidget(QLabel("G:"))
+        self.wb_g_spin = QSpinBox()
+        self.wb_g_spin.setRange(-1200, 1200)
+        self.wb_g_spin.setValue(0)
+        self.wb_g_spin.setEnabled(False) # Default to disabled (Auto is on)
+        self.wb_g_spin.valueChanged.connect(self.update_white_balance)
+        wb_g_layout.addWidget(self.wb_g_spin)
+        wb_layout.addLayout(wb_g_layout)
+        
+        # B Channel
+        wb_b_layout = QHBoxLayout()
+        wb_b_layout.addWidget(QLabel("B:"))
+        self.wb_b_spin = QSpinBox()
+        self.wb_b_spin.setRange(-1200, 1200)
+        self.wb_b_spin.setValue(0)
+        self.wb_b_spin.setEnabled(False) # Default to disabled (Auto is on)
+        self.wb_b_spin.valueChanged.connect(self.update_white_balance)
+        wb_b_layout.addWidget(self.wb_b_spin)
+        wb_layout.addLayout(wb_b_layout)
+        
+        controls_layout.addWidget(self.wb_group)
 
         # Format Selection
         controls_layout.addWidget(QLabel("Image Format:"))
@@ -604,11 +723,13 @@ class MainWindow(QMainWindow):
         self.worker.status_message.connect(self.update_status)
         self.worker.error_message.connect(self.show_error)
         self.worker.fps_updated.connect(self.update_fps_label)
+        self.worker.temperature_updated.connect(self.update_temperature)
         self.worker.histogram_ready.connect(self.hist_window.update_data)
         
         # Set initial values
         self.update_exposure(self.exp_spin.value())
         self.update_gain(self.gain_spin.value())
+        self.update_white_balance()
         self.update_frame_limit(self.fps_spin.value())
         self.update_binning(self.bin_spin.value())
         self.update_format(self.format_combo.currentText())
@@ -667,6 +788,9 @@ class MainWindow(QMainWindow):
     def update_fps_label(self, fps):
         self.fps_est_label.setText(f"Actual: {fps:.1f} fps")
 
+    def update_temperature(self, temp):
+        self.temp_label.setText(f"Temp: {temp:.1f} C")
+
     def update_status(self, msg):
         self.status_label.setText(msg)
 
@@ -682,6 +806,21 @@ class MainWindow(QMainWindow):
     def update_gain(self, val):
         if self.worker:
             self.worker.set_gain(val, self.auto_gain_check.isChecked())
+            
+    def update_white_balance(self):
+        if self.worker:
+            r = self.wb_r_spin.value()
+            g = self.wb_g_spin.value()
+            b = self.wb_b_spin.value()
+            auto = self.auto_wb_check.isChecked()
+            self.worker.set_white_balance(r, g, b, auto)
+
+    def toggle_auto_wb(self, state):
+        is_auto = (state == Qt.Checked)
+        self.wb_r_spin.setEnabled(not is_auto)
+        self.wb_g_spin.setEnabled(not is_auto)
+        self.wb_b_spin.setEnabled(not is_auto)
+        self.update_white_balance()
 
     def toggle_recording(self):
         if self.btn_record.isChecked():
