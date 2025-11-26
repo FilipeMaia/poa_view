@@ -28,8 +28,9 @@ A high-performance Python viewer for Player One Astronomy (POA) cameras, built w
 - Python 3.8+
 - `numpy`
 - `pyqtgraph`
-- `PyQt5`
-- `opencv-python` (optional, for additional testing scripts)
+- **QtPy**: Abstraction layer for Qt bindings.
+- **PyQt5** (or PyQt6, PySide2, PySide6): GUI framework.
+- **OpenCV** (`opencv-python`): Image processing and video recording.
 - **Player One Camera SDK**: `libPlayerOneCamera.dylib` (macOS), `.dll` (Windows), or `.so` (Linux).
 
 ## Installation

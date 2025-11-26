@@ -5,8 +5,8 @@ import datetime
 import cv2
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QObject, QRunnable, QThreadPool
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from qtpy.QtCore import QThread, Signal, Qt, QTimer, QObject, QRunnable, QThreadPool
+from qtpy.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, 
                              QPushButton, QGroupBox, QComboBox, QMessageBox,
                              QCheckBox)
@@ -17,15 +17,15 @@ import pyPOACamera
 #pg.setConfigOptions(antialias=True, imageAxisOrder='row-major')
 
 class CameraWorker(QThread):
-    image_ready = pyqtSignal(object)
-    status_message = pyqtSignal(str)
-    error_message = pyqtSignal(str)
-    fps_updated = pyqtSignal(float)
-    temperature_updated = pyqtSignal(float)
-    histogram_ready = pyqtSignal(object)
+    image_ready = Signal(object)
+    status_message = Signal(str)
+    error_message = Signal(str)
+    fps_updated = Signal(float)
+    temperature_updated = Signal(float)
+    histogram_ready = Signal(object)
     
     # Profiling signals
-    profile_data = pyqtSignal(str)
+    profile_data = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -529,7 +529,7 @@ class VideoRecorder(QThread):
 
 
 class SnapshotWorker(QObject, QRunnable):
-    saved = pyqtSignal(str)
+    saved = Signal(str)
 
     def __init__(self, img, filename):
         QObject.__init__(self)
