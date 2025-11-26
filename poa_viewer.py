@@ -5,7 +5,7 @@ import datetime
 import cv2
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QObject, QRunnable, QThreadPool
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, 
                              QPushButton, QGroupBox, QComboBox, QMessageBox,
@@ -528,6 +528,30 @@ class VideoRecorder(QThread):
                 self.writer.write(bgr)
 
 
+class SnapshotWorker(QObject, QRunnable):
+    saved = pyqtSignal(str)
+
+    def __init__(self, img, filename):
+        QObject.__init__(self)
+        QRunnable.__init__(self)
+        self.img = img
+        self.filename = filename
+
+    def run(self):
+        try:
+            # Save as TIFF using cv2
+            # cv2 expects BGR for color, or grayscale
+            if len(self.img.shape) == 3:
+                # RGB -> BGR
+                save_img = cv2.cvtColor(self.img, cv2.COLOR_RGB2BGR)
+            else:
+                save_img = self.img
+            
+            cv2.imwrite(self.filename, save_img)
+            self.saved.emit(self.filename)
+        except Exception as e:
+            print(f"Error saving snapshot: {e}")
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -535,9 +559,15 @@ class MainWindow(QMainWindow):
         self.resize(1000, 800)
         
         self.worker = None
+        self.worker_thread = None
         self.recorder = VideoRecorder()
         self.recording = False
         self.snapshot_requested = False
+        
+        self.thread_pool = QThreadPool()
+        
+        self.last_display_update = 0
+        self.display_interval = 1.0 / 30.0 # 30 FPS limit
 
         # Central Widget & Layout
         central_widget = QWidget()
@@ -759,10 +789,14 @@ class MainWindow(QMainWindow):
         self.update_status("Capture stopped.")
 
     def update_image(self, img):
-        levelMode = 'mono'
-        if len(img.shape) == 3:
-            levelMode = 'rgba'
-        self.imv.setImage(img, autoLevels=False, autoRange=False)
+        # Throttle display updates
+        now = time.time()
+        if now - self.last_display_update >= self.display_interval:
+            self.last_display_update = now
+            levelMode = 'mono'
+            if len(img.shape) == 3:
+                levelMode = 'rgba'
+            self.imv.setImage(img, autoLevels=False, autoRange=False)
         
         if self.recording:
             self.recorder.add_frame(img)
@@ -771,19 +805,16 @@ class MainWindow(QMainWindow):
             self.snapshot_requested = False
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"snapshot_{timestamp}.tiff"
-            # Save as TIFF using cv2
-            # cv2 expects BGR for color, or grayscale
-            if len(img.shape) == 3:
-                # RGB -> BGR
-                save_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            else:
-                save_img = img
             
-            cv2.imwrite(filename, save_img)
-            self.update_status(f"Snapshot saved: {filename}")
+            worker = SnapshotWorker(img.copy(), filename)
+            worker.saved.connect(self.on_snapshot_saved)
+            self.thread_pool.start(worker)
             
-        # if self.hist_window.isVisible():
-        #    self.hist_window.update_histogram(img)
+    def on_snapshot_saved(self, filename):
+        self.update_status(f"Snapshot saved: {filename}")
+        
+    # if self.hist_window.isVisible():
+    #    self.hist_window.update_histogram(img)
 
     def update_fps_label(self, fps):
         self.fps_est_label.setText(f"Actual: {fps:.1f} fps")
