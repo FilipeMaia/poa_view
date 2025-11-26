@@ -41,11 +41,23 @@ A high-performance Python viewer for Player One Astronomy (POA) cameras, built w
     cd poa_view
     ```
 
-2.  **Install dependencies**:
+2.  **Set up a Virtual Environment** (Recommended):
+    It is best practice to use a virtual environment to manage dependencies.
     ```bash
-    pip install .
-    # OR
-    pip install numpy pyqtgraph PyQt5 opencv-python
+    # Create a virtual environment named 'venv'
+    python3 -m venv venv
+
+    # Activate the virtual environment
+    # On macOS/Linux:
+    source venv/bin/activate
+    # On Windows:
+    # venv\Scripts\activate
+    ```
+
+3.  **Install dependencies**:
+    ```bash
+    pip install --upgrade pip
+    pip install numpy pyqtgraph QtPy PyQt5 opencv-python
     ```
 
 3.  **SDK Setup**:
