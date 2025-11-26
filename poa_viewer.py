@@ -468,6 +468,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.recorder = VideoRecorder()
         self.recording = False
+        self.snapshot_requested = False
 
         # Central Widget & Layout
         central_widget = QWidget()
@@ -557,6 +558,12 @@ class MainWindow(QMainWindow):
         self.btn_record.setEnabled(False) # Only enable when capturing
         controls_layout.addWidget(self.btn_record)
         
+        # Snapshot Button
+        self.btn_snapshot = QPushButton("Save Snapshot")
+        self.btn_snapshot.clicked.connect(self.request_snapshot)
+        self.btn_snapshot.setEnabled(False)
+        controls_layout.addWidget(self.btn_snapshot)
+        
         controls_layout.addStretch()
 
         # Image Display (Right)
@@ -613,6 +620,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_record.setEnabled(True)
+        self.btn_snapshot.setEnabled(True)
         self.update_status("Capture started.")
 
     def stop_capture(self):
@@ -626,6 +634,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_record.setEnabled(False)
+        self.btn_snapshot.setEnabled(False)
         self.update_status("Capture stopped.")
 
     def update_image(self, img):
@@ -636,6 +645,21 @@ class MainWindow(QMainWindow):
         
         if self.recording:
             self.recorder.add_frame(img)
+            
+        if self.snapshot_requested:
+            self.snapshot_requested = False
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"snapshot_{timestamp}.tiff"
+            # Save as TIFF using cv2
+            # cv2 expects BGR for color, or grayscale
+            if len(img.shape) == 3:
+                # RGB -> BGR
+                save_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            else:
+                save_img = img
+            
+            cv2.imwrite(filename, save_img)
+            self.update_status(f"Snapshot saved: {filename}")
             
         # if self.hist_window.isVisible():
         #    self.hist_window.update_histogram(img)
@@ -695,6 +719,10 @@ class MainWindow(QMainWindow):
             self.btn_record.setStyleSheet("")
             self.recorder.stop_recording()
             self.update_status(f"Recording saved: {self.recorder.filename}")
+
+    def request_snapshot(self):
+        self.snapshot_requested = True
+        self.update_status("Waiting for next frame to save snapshot...")
 
     def toggle_auto_gain(self, state):
         is_auto = (state == Qt.Checked)
