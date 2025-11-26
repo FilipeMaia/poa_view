@@ -84,10 +84,8 @@ class CameraWorker(QThread):
                     pyPOACamera.SetImageSize(self.camera_id, props.maxWidth, props.maxHeight)
                     self.status_message.emit(f"Resolution: {props.maxWidth}x{props.maxHeight}")
                     
-                    # Determine if camera is color based on supported formats
-                    # A more robust check might be needed, but for now, if RGB24 is supported, assume color.
-                    err, formats = pyPOACamera.GetSupportedImageFormats(self.camera_id)
-                    if pyPOACamera.POAImgFormat.POA_RGB24 in formats:
+                    # Determine if camera is color based on properties
+                    if props.isColorCamera:
                         self.is_color = True
                     else:
                         self.is_color = False
